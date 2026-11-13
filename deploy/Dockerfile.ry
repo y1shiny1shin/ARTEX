@@ -1,0 +1,8 @@
+# RyAgent runtime image.
+#
+# The base image already contains the ARTEX tool layer (curl/nmap/ripgrep/Node/
+# Playwright). We only replace the app binary, so a rebuild copies ~41MB instead
+# of pulling/rebuilding the ~1.7GB base on a small server disk.
+FROM ruoji6/artex:latest
+COPY artex /app/artex
+RUN chmod +x /app/artex

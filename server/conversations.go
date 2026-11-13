@@ -18,6 +18,7 @@ import (
 	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/artex/sidequestion"
 	"github.com/Autumn-27/norma/llm"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -653,6 +654,10 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	if a, err := pg.GetAgentByKey(c.AgentKey); err == nil && a != nil {
 		webSearch = a.WebSearch
 	}
+	if req := strings.TrimSpace(c.HardRequirement); req != "" {
+		ctx = agent.WithChatHardRequirement(ctx, req)
+		ctx = intercept.WithReviewHardRequirement(ctx, req)
+	}
 	sessionID := s.convBusyKey(c.ID) // "conv-<id>" transcript session
 	emit := func(rec db.Activity) {
 		if _, err := pg.AppendConvActivity(c.ID, rec); err != nil {
@@ -971,4 +976,32 @@ func firstLine(s string, max int) string {
 		s = string([]rune(s)[:max]) + "…"
 	}
 	return s
+}
+
+// pgUpdateConversationHardRequirement is the ONLY write path for a chat-level
+// hard requirement. Like the task endpoint, it re-authenticates with the admin
+// password so a model that somehow obtains a JWT still cannot rewrite it.
+func (s *Server) pgUpdateConversationHardRequirement(w http.ResponseWriter, r *http.Request) {
+	pg, c, ok := s.convByID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Text     string `json:"text"`
+		Password string `json:"password"`
+	}
+	if !decodeConversationRequest(w, r, &req) {
+		return
+	}
+	hash, ok, err := pg.GetSetting(authPassKey)
+	if err != nil || !ok || hash == "" || bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil {
+		writeErr(w, http.StatusForbidden, "修改硬性要求需要管理员密码")
+		return
+	}
+	updated, err := pg.SetConversationHardRequirement(c.ID, req.Text, "human")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }

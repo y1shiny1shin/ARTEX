@@ -243,6 +243,12 @@ func TestJudgeRetryDoesNotCallCanceledOrDisabledReviewer(t *testing.T) {
 		t.Fatal(err)
 	}
 	i := retryTestInterceptor(t, nil)
+	// The judge is enabled by default (RyAgent hardening); explicitly disable it
+	// here to exercise the "no reviewer" path. Write the setting directly because
+	// the test DB only has the minimal settings table.
+	if _, err := i.db.Exec(`INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, settingJudgeEnabled, "false"); err != nil {
+		t.Fatal(err)
+	}
 	i.SetReviewer(func(context.Context, int64, string, ReviewInput) (Decision, error) {
 		t.Fatal("called disabled reviewer")
 		return Decision{}, nil

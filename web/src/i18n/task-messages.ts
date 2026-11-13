@@ -383,6 +383,23 @@ export const taskMessages = {
     "要达成什么，例如：拿下后台管理权限、获取服务器权限",
     "Desired outcome, for example: Assess access to the admin panel or server",
   ],
+  "taskUI.hardRequirement": ["硬性要求（仅人工可改）", "Hard requirement (human-only)"],
+  "taskUI.hardRequirementExample": [
+    "整个任务周期内必须遵守的要求，例如：只测 example.com；禁止爆破；禁止写操作。Agent 没有修改它的工具。",
+    "A requirement that must hold for the whole task, for example: only test example.com; no brute force; no writes. The agent has no tool to change it.",
+  ],
+  "taskUI.hardRequirementHelp": [
+    "逐字注入每次规划/执行提示词和拦截裁判；只有本页的人工入口能修改，模型无法在对话中改写。",
+    "Injected verbatim into every planner/worker prompt and the interception judge. Only the human control on this page can change it; the model cannot rewrite it in chat.",
+  ],
+  "taskUI.hardRequirementEmpty": ["未设置硬性要求", "No hard requirement set"],
+  "taskUI.hardRequirementEdit": ["修改硬性要求", "Edit hard requirement"],
+  "taskUI.hardRequirementSaveFailed": ["保存硬性要求失败", "Failed to save the hard requirement"],
+  "taskUI.hardRequirementPassword": ["管理员密码（再次确认）", "Admin password (re-confirm)"],
+  "taskUI.hardRequirementPasswordHelp": [
+    "修改硬性要求必须重新输入管理员密码；模型没有这个密码，也没有修改入口。",
+    "Changing the hard requirement requires re-entering the admin password. The model has neither the password nor a write tool.",
+  ],
   "taskUI.shareGlobal": ["共享全局资产", "Share global assets"],
   "taskUI.shareGlobalHelp": [
     "默认关闭，仅使用本任务及明确关联任务的资产。开启后可查询全局资产库，测试仍须遵守授权范围。",

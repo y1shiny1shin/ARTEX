@@ -125,7 +125,8 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
 	defer cleanup()
 
-	system, boundary := deferredSystem(chatSystem(agentKey, c.workDir, sessionWorkDir), def)
+	systemBody := chatSystem(agentKey, c.workDir, sessionWorkDir) + renderHardRequirement(chatHardRequirement(ctx))
+	system, boundary := deferredSystem(systemBody, def)
 	proxyAddr := c.proxyAddr
 	if c.proxyAddrFn != nil {
 		proxyAddr = c.proxyAddrFn()

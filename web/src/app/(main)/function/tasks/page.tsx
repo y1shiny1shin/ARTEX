@@ -3589,6 +3589,7 @@ function CreateTaskSheet({
   const [categoryID, setCategoryID] = React.useState<number | undefined>(undefined);
   const [description, setDescription] = React.useState("");
   const [goal, setGoal] = React.useState("");
+  const [hardRequirement, setHardRequirement] = React.useState("");
   const [selectedTemplateID, setSelectedTemplateID] = React.useState<number | null>(null);
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [companies, setCompanies] = React.useState<Company[]>([]);
@@ -3683,6 +3684,7 @@ function CreateTaskSheet({
         categoryId: categoryID,
         description: description.trim(),
         goal: goal.trim(),
+        hardRequirement: hardRequirement.trim(),
         llmProfileIds: llmProfileIDs.map(Number),
         sourceTaskIds: sourceTaskIDs,
         companyIds: companyIDs,
@@ -3708,6 +3710,7 @@ function CreateTaskSheet({
       setCategoryID(undefined);
       setDescription("");
       setGoal("");
+      setHardRequirement("");
       setSelectedTemplateID(null);
       setSourceTaskIDs([]);
       setCompanyIDs([]);
@@ -3992,6 +3995,17 @@ function CreateTaskSheet({
                 value={goal}
                 onChange={(e) => setGoal(e.target.value)}
               />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="hard-requirement">{translate("taskUI.hardRequirement")}</Label>
+              <Textarea
+                id="hard-requirement"
+                className="min-h-24"
+                placeholder={translate("taskUI.hardRequirementExample")}
+                value={hardRequirement}
+                onChange={(e) => setHardRequirement(e.target.value)}
+              />
+              <p className="text-muted-foreground text-xs">{translate("taskUI.hardRequirementHelp")}</p>
             </div>
             <Field>
               <div className="flex items-center gap-2">

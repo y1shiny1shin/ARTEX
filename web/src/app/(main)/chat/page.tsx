@@ -15,6 +15,7 @@ import {
   PinIcon,
   PinOffIcon,
   PlusIcon,
+  ShieldAlertIcon,
   Square,
   Trash2Icon,
   XIcon,
@@ -48,10 +49,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import { useSideQuestions } from "@/hooks/use-side-questions";
 import { agentDisplayName } from "@/i18n/agent-display";
 import { localizedError } from "@/i18n/errors";
@@ -391,6 +395,110 @@ function LLMProfileRow({
 
 // DraftChat is the default right-pane view: a fresh chat (agent picker in the
 // header, centered empty state, composer) with NO conversation created yet. The
+// HardRequirementRow is the chat-level counterpart of the task hard-requirement
+// card: a compact button below the composer. The value is injected verbatim into
+// every model call and the interception judge; only this human control can change
+// it, and the change requires the admin password again.
+function HardRequirementRow({
+  value,
+  onSave,
+  disabled,
+}: {
+  value: string;
+  onSave: (text: string, password: string) => Promise<void>;
+  disabled?: boolean;
+}) {
+  const { t: translate } = useLiveTranslation();
+  const [open, setOpen] = React.useState(false);
+  const [draft, setDraft] = React.useState(value);
+  const [password, setPassword] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  React.useEffect(() => {
+    if (!open) {
+      setDraft(value);
+      setPassword("");
+      setError("");
+    }
+  }, [value, open]);
+
+  async function save() {
+    if (!password) {
+      setError(translate("overview.hardRequirementPasswordRequired"));
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      await onSave(draft.trim(), password);
+      setOpen(false);
+      toast.success(translate("overview.hardRequirementSaved"));
+    } catch (e) {
+      setError(localizedError(e, translate));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center border-t px-3 py-1">
+      <Popover open={open} onOpenChange={(next) => (!disabled || !next ? setOpen(next) : undefined)}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground h-7 gap-1.5 px-2 text-xs"
+            disabled={disabled}
+            title={translate("overview.hardRequirementHelp")}
+          >
+            <ShieldAlertIcon className="size-3.5" />
+            {translate("overview.hardRequirement")}
+            {value.trim() ? (
+              <Badge variant="secondary" className="px-1 py-0 text-[9px]">
+                {translate("overview.hardRequirementSet")}
+              </Badge>
+            ) : null}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-[min(92vw,460px)] p-3">
+          <div className="grid gap-2">
+            <div className="text-sm font-medium">{translate("overview.hardRequirement")}</div>
+            <p className="text-muted-foreground text-xs">{translate("overview.hardRequirementHelp")}</p>
+            <Textarea
+              className="min-h-24"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder={translate("overview.hardRequirementExample")}
+            />
+            <div className="grid gap-1.5">
+              <Label htmlFor="chat-hard-req-password" className="text-xs">
+                {translate("overview.hardRequirementPassword")}
+              </Label>
+              <Input
+                id="chat-hard-req-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+            {error ? <p className="text-destructive text-xs">{error}</p> : null}
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={() => void save()} disabled={saving}>
+                {translate("overview.save")}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setOpen(false)} disabled={saving}>
+                {translate("overview.cancel")}
+              </Button>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
 // conversation is created lazily on the first send (ChatGPT-style), then the
 // parent switches to the real ChatView.
 function DraftChat({
@@ -448,6 +556,24 @@ function DraftChat({
     }
   }
 
+  // Saving the requirement needs a conversation row (it is persisted, not just
+  // local state). Create one, persist the requirement, then hand the typed input
+  // to ChatView — the same lazy-create flow the paperclip uses.
+  async function saveHardRequirement(text: string, password: string) {
+    if (!agentKey || sending || uploading) return;
+    const c = await api.createConversation(agentKey, "", llmProfileId);
+    try {
+      await api.updateConversationHardRequirement(c.id, text, password);
+    } catch (e) {
+      // The draft has no conversation yet; don't leave an empty orphan if the
+      // admin-password check fails. Best-effort cleanup, then surface the error.
+      await api.deleteConversation(c.id).catch(() => undefined);
+      throw e;
+    }
+    c.hard_requirement = text;
+    onStarted(c, { input });
+  }
+
   const agentPicker = (
     <Select value={agentKey} onValueChange={setAgentKey}>
       <SelectTrigger className="w-full sm:w-40">
@@ -495,6 +621,11 @@ function DraftChat({
         leftSlot={agentPicker}
         onPickFiles={pickFiles}
         uploading={uploading}
+      />
+      <HardRequirementRow
+        value=""
+        onSave={saveHardRequirement}
+        disabled={sending || uploading || !agentKey}
       />
       <LLMProfileRow
         profiles={profiles}
@@ -545,6 +676,11 @@ function ChatView({
   const agent = agents.find((a) => a.key === conv.agent_key);
   const currentProfileId = conv.llm_profile_id ?? null;
   const side = useSideQuestions(`/api/conversations/${conv.id}`);
+
+  async function saveHardRequirement(text: string, password: string) {
+    await api.updateConversationHardRequirement(conv.id, text, password);
+    onConvUpdated();
+  }
 
   async function changeProfile(id: number | null) {
     try {
@@ -880,6 +1016,11 @@ function ChatView({
         onPickFiles={pickFiles}
         onRemoveAttachment={(path) => setAttachments((p) => p.filter((x) => x.path !== path))}
         uploading={uploading}
+      />
+      <HardRequirementRow
+        value={conv.hard_requirement ?? ""}
+        onSave={saveHardRequirement}
+        disabled={running || sending}
       />
       <LLMProfileRow
         profiles={profiles}

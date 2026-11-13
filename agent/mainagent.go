@@ -133,7 +133,11 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	mainDir := ensureRunDir(m.workDir, taskID, 0)
 	ctx = intercept.WithReviewWorkingDirectory(ctx, mainDir)
-	system, boundary := deferredSystem(mainAgentSystem(goal, m.workDir, mainDir), def)
+	if req := reviewHardRequirement(ts); req != "" {
+		ctx = intercept.WithReviewHardRequirement(ctx, req)
+	}
+	systemBody := mainAgentSystem(goal, m.workDir, mainDir) + hardRequirementBlock(ts)
+	system, boundary := deferredSystem(systemBody, def)
 	proxyAddr := m.proxyAddr
 	if m.proxyAddrFn != nil {
 		proxyAddr = m.proxyAddrFn()

@@ -33,6 +33,7 @@ export interface Task {
   pinned_at?: string | null;
   description: string;
   goal: string;
+  hard_requirement?: string;
   status: TaskStatus;
   no_result_seconds?: number;
   no_result_min_findings?: number;
@@ -815,6 +816,7 @@ export interface Conversation {
   agent_key: string;
   title: string;
   llm_profile_id?: number;
+  hard_requirement?: string;
   pinned?: boolean;
   pinned_at?: string | null;
   created_at: string;
@@ -1049,6 +1051,22 @@ export interface Settings {
   notify_enabled?: boolean; // 推送总开关，默认开；用于维护期一键止血
   notify_public_base_url?: string; // 漏洞详情回链的外部访问地址；空=消息不带回链
   notify_digest_interval_min?: number; // 汇总模式周期（分钟），默认 30
+}
+
+export interface ProxySource {
+  id: number;
+  name: string;
+  kind: "http_list" | "fofa" | "hunter";
+  url: string;
+  query: string;
+  pages: number;
+  enabled: boolean;
+  has_credentials: boolean;
+  last_run_at?: string;
+  last_status: "ok" | "empty" | "error" | "";
+  last_error: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ProxyPoolEntry {

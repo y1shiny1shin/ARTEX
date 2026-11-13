@@ -2,7 +2,10 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ConvTokenSummary is one conversation's token total (sum of its kind='result'
@@ -50,14 +53,15 @@ GROUP BY c.id`)
 // Conversation is one ChatGPT-style chat thread bound to an agent key. It lives
 // independent of the pentest exploration graph — see schema.sql §I.
 type Conversation struct {
-	ID           int64      `json:"id"`
-	AgentKey     string     `json:"agent_key"`
-	Title        string     `json:"title"`
-	LLMProfileID *int64     `json:"llm_profile_id,omitempty"`
-	Pinned       bool       `json:"pinned"`
-	PinnedAt     *time.Time `json:"pinned_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID              int64      `json:"id"`
+	AgentKey        string     `json:"agent_key"`
+	Title           string     `json:"title"`
+	LLMProfileID    *int64     `json:"llm_profile_id,omitempty"`
+	HardRequirement string     `json:"hard_requirement"`
+	Pinned          bool       `json:"pinned"`
+	PinnedAt        *time.Time `json:"pinned_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // ConversationPatch updates only the fields whose pointers are non-nil.
@@ -66,12 +70,12 @@ type ConversationPatch struct {
 	Pinned *bool
 }
 
-const convCols = `id, agent_key, title, llm_profile_id, pinned_at, created_at, updated_at`
+const convCols = `id, agent_key, title, llm_profile_id, COALESCE(hard_requirement,''), pinned_at, created_at, updated_at`
 
 func scanConv(row interface{ Scan(...any) error }) (Conversation, error) {
 	var c Conversation
 	var pinnedAt sql.NullTime
-	err := row.Scan(&c.ID, &c.AgentKey, &c.Title, &c.LLMProfileID, &pinnedAt, &c.CreatedAt, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.AgentKey, &c.Title, &c.LLMProfileID, &c.HardRequirement, &pinnedAt, &c.CreatedAt, &c.UpdatedAt)
 	if pinnedAt.Valid {
 		c.Pinned = true
 		c.PinnedAt = &pinnedAt.Time
@@ -333,4 +337,39 @@ func (d *DB) ConvActivityDetail(convID, id int64) (string, error) {
 		return "", nil
 	}
 	return s.String, err
+}
+
+// MaxConversationHardRequirementRunes bounds the chat-level hard requirement.
+const MaxConversationHardRequirementRunes = 20000
+
+// SetConversationHardRequirement replaces a conversation's hard requirement and
+// writes an audit row in the same transaction. This is the ONLY write path: it is
+// called by the human-only HTTP endpoint, never by an agent tool.
+func (d *DB) SetConversationHardRequirement(conversationID int64, text, actor string) (*Conversation, error) {
+	text = strings.TrimSpace(text)
+	if utf8.RuneCountInString(text) > MaxConversationHardRequirementRunes {
+		return nil, fmt.Errorf("硬性要求最多 %d 个字符", MaxConversationHardRequirementRunes)
+	}
+	if actor == "" {
+		actor = "human"
+	}
+	tx, err := d.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var old string
+	if err := tx.QueryRow(`SELECT COALESCE(hard_requirement,'') FROM conversations WHERE id=$1 FOR UPDATE`, conversationID).Scan(&old); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`UPDATE conversations SET hard_requirement=$2 WHERE id=$1`, conversationID, text); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`INSERT INTO conversation_hard_requirement_audit(conversation_id, old_text, new_text, actor) VALUES ($1,$2,$3,$4)`, conversationID, old, text, actor); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return d.GetConversation(conversationID)
 }

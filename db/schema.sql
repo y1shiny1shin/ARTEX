@@ -508,6 +508,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     category_id    BIGINT REFERENCES task_categories(id) ON DELETE SET NULL,
     description    TEXT NOT NULL,
     goal           TEXT NOT NULL,
+    hard_requirement TEXT NOT NULL DEFAULT '',
     exploration_id BIGINT NOT NULL UNIQUE
                      REFERENCES explorations(id) ON DELETE RESTRICT,
     status         TEXT NOT NULL DEFAULT 'created'
@@ -563,6 +564,17 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS queued BOOLEAN NOT NULL DEFAULT false
 -- 给 agent 开放 add_task_scope/list_untested_assets;false=全部关闭(见 task_scope.go)。
 -- 存量任务默认 true 保持原行为;company 关联(task_scope kind=company)不受此开关影响。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS coverage_enabled BOOLEAN NOT NULL DEFAULT true;
+-- 硬性要求：人设定的不可被 Agent 改写的要求。LLM 没有任何写入通道；只有人工 API 可改。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS hard_requirement TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS task_hard_requirement_audit (
+    id         BIGSERIAL PRIMARY KEY,
+    task_id    BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    old_text   TEXT NOT NULL DEFAULT '',
+    new_text   TEXT NOT NULL,
+    actor      TEXT NOT NULL DEFAULT 'human',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_task_hard_req_audit_task ON task_hard_requirement_audit(task_id, created_at DESC);
 -- Global asset reuse is opt-in, including for pre-existing tasks.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS share_global_assets BOOLEAN NOT NULL DEFAULT false;
 -- 任务级 Worker 运行数量;0=用全局默认(settings.workers)。补旧库。
@@ -987,10 +999,22 @@ CREATE TABLE IF NOT EXISTS conversations (
     title          TEXT NOT NULL DEFAULT '',
     llm_profile_id BIGINT REFERENCES llm_profiles(id) ON DELETE SET NULL,
     pinned_at      TIMESTAMPTZ,
+    hard_requirement TEXT NOT NULL DEFAULT '',
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
+-- 会话级硬性要求：人设定的不可被 Agent 改写的要求。LLM 没有写入通道。
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hard_requirement TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS conversation_hard_requirement_audit (
+    id              BIGSERIAL PRIMARY KEY,
+    conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    old_text        TEXT NOT NULL DEFAULT '',
+    new_text        TEXT NOT NULL,
+    actor           TEXT NOT NULL DEFAULT 'human',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_conv_hard_req_audit ON conversation_hard_requirement_audit(conversation_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_llm_profile ON conversations(llm_profile_id) WHERE llm_profile_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_conversations_pinned ON conversations(pinned_at DESC) WHERE pinned_at IS NOT NULL;
 DROP TRIGGER IF EXISTS trg_conversations_upd ON conversations;
@@ -1020,6 +1044,30 @@ CREATE INDEX IF NOT EXISTS idx_conv_act_tool_call ON conversation_activities(con
 -- =====================================================================
 -- J. Agent 触发器
 -- =====================================================================
+-- 代理发现源：代理猎手主动运行的来源（FOFA API / HTTP 列表）。
+-- 不内置任何公开免费列表；由操作员按需配置，凭据只存不透出。
+CREATE TABLE IF NOT EXISTS proxy_sources (
+    id          BIGSERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('http_list','fofa','hunter')),
+    url         TEXT NOT NULL DEFAULT '',
+    query       TEXT NOT NULL DEFAULT '',
+    headers     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    pages       INTEGER NOT NULL DEFAULT 1,
+    enabled     BOOLEAN NOT NULL DEFAULT true,
+    last_run_at TIMESTAMPTZ,
+    last_status TEXT NOT NULL DEFAULT '',
+    last_error  TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE proxy_sources DROP CONSTRAINT IF EXISTS proxy_sources_kind_check;
+ALTER TABLE proxy_sources ADD CONSTRAINT proxy_sources_kind_check CHECK (kind IN ('http_list','fofa','hunter'));
+CREATE INDEX IF NOT EXISTS idx_proxy_sources_enabled ON proxy_sources(enabled);
+DROP TRIGGER IF EXISTS trg_proxy_sources_upd ON proxy_sources;
+CREATE TRIGGER trg_proxy_sources_upd BEFORE UPDATE ON proxy_sources
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 CREATE TABLE IF NOT EXISTS agent_triggers (
     id                          BIGSERIAL PRIMARY KEY,
     agent_key                   TEXT NOT NULL,

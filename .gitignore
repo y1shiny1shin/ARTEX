@@ -60,3 +60,12 @@ Thumbs.db
 /bench/
 /Dockerfile.bench
 /Dockerfile.bench.v2
+
+# RyAgent 本地工作区：设计文档、临时目录、缓存与凭证一律不入库
+/tmp/
+/.cache/
+*.md.bak
+设计*.md
+
+# RyAgent deployment secrets / runtime keys
+/keys/

@@ -54,6 +54,7 @@ func run() int {
 	var (
 		addr    = flag.String("addr", ":8787", "HTTP listen address")
 		dataDir = flag.String("data", filepath.Join(config.BaseDir(), "data"), "data directory for SQLite stores (default: data/ next to the executable)")
+		keyDir  = flag.String("keydir", config.BaseDir(), "directory for jwt.key (keep outside the agent-visible data workspace)")
 		proxy   = flag.String("proxy", "127.0.0.1:8788", "traffic recording proxy address (empty to disable)")
 	)
 	flag.Parse()
@@ -112,8 +113,15 @@ func run() int {
 		skillDir = abs
 	}
 	log.Printf("[config] skill 目录: %s", skillDir)
-	srv := server.New(ctx, mgr, skillDir, *dataDir, config.BaseDir())
+	srv := server.New(ctx, mgr, skillDir, *dataDir, *keyDir)
 	defer srv.Close()
+	// Agent Bash subprocesses inherit os.Environ(). The DB credentials are only
+	// needed while NewManager opens the pool; dropping them here prevents a
+	// model-driven command from simply running `env` and talking to PostgreSQL.
+	// (Same-UID /proc/1/environ access is a separate sandbox concern.)
+	for _, k := range []string{"ARTEX_PG_DSN", "POSTGRES_PASSWORD"} {
+		_ = os.Unsetenv(k)
+	}
 	httpSrv := &http.Server{
 		Addr:              *addr,
 		Handler:           srv.Handler(),

@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/db"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -72,5 +74,53 @@ func (s *Server) updateTaskMetadata(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "task not found")
 		return
 	}
+	writeJSON(w, http.StatusOK, taskDTO(task, s.resolvedTaskStatus(task)))
+}
+
+// updateTaskHardRequirement is the ONLY endpoint that changes a task's hard
+// requirement. It is intentionally not exposed as an agent tool, so the model
+// cannot rewrite the requirement mid-conversation. Every change is audited in
+// task_hard_requirement_audit by db.SetTaskHardRequirement.
+func (s *Server) updateTaskHardRequirement(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	task, ok := s.m.Task(taskID)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "task not found")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxTaskMetadataRequestSize)
+	var request struct {
+		Text     string `json:"text"`
+		Password string `json:"password"`
+	}
+	if err := decode(r, &request); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeErr(w, http.StatusRequestEntityTooLarge, "请求正文过大")
+		} else {
+			writeErr(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	// Re-auth with the operator password. The agent has no password, so even if it
+	// obtains a JWT it cannot rewrite the requirement through this endpoint.
+	hash, ok, err := s.m.pg.GetSetting(authPassKey)
+	if err != nil || !ok || hash == "" || bcrypt.CompareHashAndPassword([]byte(hash), []byte(request.Password)) != nil {
+		writeErr(w, http.StatusForbidden, "修改硬性要求需要管理员密码")
+		return
+	}
+	id, err := strconv.ParseInt(task.ID, 10, 64)
+	if err != nil || id <= 0 {
+		writeErr(w, http.StatusBadRequest, "bad task id")
+		return
+	}
+	updated, err := s.m.PG().SetTaskHardRequirement(id, request.Text, "human")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Keep the live handle in sync for prompts/DTO. The DB read path is still the
+	// source of truth; this only avoids a stale UI until the next reload.
+	task.HardRequirement = updated.HardRequirement
 	writeJSON(w, http.StatusOK, taskDTO(task, s.resolvedTaskStatus(task)))
 }

@@ -13,23 +13,24 @@ import (
 
 // Task is a row in the task registry (1:1 with an exploration).
 type Task struct {
-	ID            int64      `json:"id"`
-	Name          string     `json:"name"` // 可选任务名称;空=未命名
-	Remark        string     `json:"remark"`
-	CategoryID    *int64     `json:"category_id,omitempty"`
-	CategoryName  string     `json:"category_name,omitempty"`
-	Pinned        bool       `json:"pinned"`
-	PinnedAt      *time.Time `json:"pinned_at,omitempty"`
-	Description   string     `json:"description"`
-	Goal          string     `json:"goal"`
-	ExplorationID int64      `json:"exploration_id"`
-	Status        string     `json:"status"`
-	Paused        bool       `json:"paused"`
-	PauseReason   string     `json:"pause_reason,omitempty"`
-	Queued        bool       `json:"queued"`
-	QueuedAt      *time.Time `json:"queued_at,omitempty"`
-	QueueMode     string     `json:"queue_mode,omitempty"`
-	LLMProfileID  *int64     `json:"llm_profile_id,omitempty"`
+	ID              int64      `json:"id"`
+	Name            string     `json:"name"` // 可选任务名称;空=未命名
+	Remark          string     `json:"remark"`
+	CategoryID      *int64     `json:"category_id,omitempty"`
+	CategoryName    string     `json:"category_name,omitempty"`
+	Pinned          bool       `json:"pinned"`
+	PinnedAt        *time.Time `json:"pinned_at,omitempty"`
+	Description     string     `json:"description"`
+	Goal            string     `json:"goal"`
+	HardRequirement string     `json:"hard_requirement"`
+	ExplorationID   int64      `json:"exploration_id"`
+	Status          string     `json:"status"`
+	Paused          bool       `json:"paused"`
+	PauseReason     string     `json:"pause_reason,omitempty"`
+	Queued          bool       `json:"queued"`
+	QueuedAt        *time.Time `json:"queued_at,omitempty"`
+	QueueMode       string     `json:"queue_mode,omitempty"`
+	LLMProfileID    *int64     `json:"llm_profile_id,omitempty"`
 	// Task-level ordered LLM chain. LLMProfileID remains the compatibility alias
 	// for ActiveLLMProfileID while older API clients still send one profile id.
 	LLMProfileIDs      []int64    `json:"llm_profile_ids,omitempty"`
@@ -154,6 +155,43 @@ const MaxTaskWorkerCount = 50
 // MaxTaskRemarkRunes is the shared limit for task and template remarks.
 const MaxTaskRemarkRunes = 2000
 
+// MaxTaskHardRequirementRunes bounds the operator-authored hard requirement.
+// It is deliberately generous (a page of text) but still bounded so it cannot
+// blow up every prompt or the review payload.
+const MaxTaskHardRequirementRunes = 20000
+
+// SetTaskHardRequirement replaces a task's hard requirement and writes an audit
+// row in the same transaction. This is the ONLY write path: it is called by the
+// human-only HTTP endpoint, never by an agent tool.
+func (d *DB) SetTaskHardRequirement(taskID int64, text, actor string) (*Task, error) {
+	text = strings.TrimSpace(text)
+	if utf8.RuneCountInString(text) > MaxTaskHardRequirementRunes {
+		return nil, fmt.Errorf("硬性要求最多 %d 个字符", MaxTaskHardRequirementRunes)
+	}
+	if actor == "" {
+		actor = "human"
+	}
+	tx, err := d.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var old string
+	if err := tx.QueryRow(`SELECT COALESCE(hard_requirement,'') FROM tasks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, taskID).Scan(&old); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`UPDATE tasks SET hard_requirement=$2 WHERE id=$1`, taskID, text); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`INSERT INTO task_hard_requirement_audit(task_id, old_text, new_text, actor) VALUES ($1,$2,$3,$4)`, taskID, old, text, actor); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return d.GetTask(taskID)
+}
+
 // normalizeWorkerCount converts negative per-task worker overrides to 0.
 // The upper bound is enforced separately by validateWorkerCount; 0 means
 // "use the global settings.workers default".
@@ -202,6 +240,10 @@ type TaskCreateOptions struct {
 	ShareGlobalAssets bool
 	// WorkerCount 是本任务并发运行的工作 Agent 数;0/省略=用全局默认。上限 50。
 	WorkerCount int
+	// HardRequirement is the operator-authored, immutable requirement injected
+	// into every planner/worker/main prompt and the review judge. No model-callable
+	// tool writes it; only the human API does.
+	HardRequirement string
 	// Remark 是创建时可带的任务备注(最多 2000 字);空=无备注。
 	Remark string
 	// InterceptRules 是任务级资产拦截规则,创建时随任务在同一事务内写入 task_intercept_rules。
@@ -259,6 +301,10 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 	if utf8.RuneCountInString(opts.Remark) > MaxTaskRemarkRunes {
 		return nil, fmt.Errorf("备注最多 %d 个字符", MaxTaskRemarkRunes)
 	}
+	opts.HardRequirement = strings.TrimSpace(opts.HardRequirement)
+	if utf8.RuneCountInString(opts.HardRequirement) > MaxTaskHardRequirementRunes {
+		return nil, fmt.Errorf("硬性要求最多 %d 个字符", MaxTaskHardRequirementRunes)
+	}
 	var categoryName string
 	if opts.CategoryID != nil {
 		if *opts.CategoryID <= 0 {
@@ -278,7 +324,7 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 	}
 	t := &Task{
 		Name: opts.Name, CategoryID: opts.CategoryID, CategoryName: categoryName,
-		Description: description, Goal: goal, ExplorationID: expID,
+		Description: description, Goal: goal, HardRequirement: opts.HardRequirement, ExplorationID: expID,
 		LLMProfileID: active, ActiveLLMProfileID: active,
 		LLMProfileIDs:   append([]int64(nil), opts.LLMProfileIDs...),
 		SourceTaskIDs:   append([]int64(nil), opts.SourceTaskIDs...),
@@ -288,9 +334,9 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		CoverageEnabled: coverageEnabled, ShareGlobalAssets: opts.ShareGlobalAssets, WorkerCount: opts.WorkerCount, Remark: opts.Remark,
 	}
 	if err := tx.QueryRow(`
-INSERT INTO tasks(name, remark, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, worker_count, share_global_assets, no_result_seconds, no_result_min_findings, no_result_min_severity)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-RETURNING id, status, paused, created_at`, opts.Name, opts.Remark, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, opts.WorkerCount, opts.ShareGlobalAssets, opts.NoResultSeconds, opts.NoResultMinFindings, opts.NoResultMinSeverity).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
+INSERT INTO tasks(name, remark, category_id, description, goal, hard_requirement, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, worker_count, share_global_assets, no_result_seconds, no_result_min_findings, no_result_min_severity)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+RETURNING id, status, paused, created_at`, opts.Name, opts.Remark, opts.CategoryID, description, goal, opts.HardRequirement, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, opts.WorkerCount, opts.ShareGlobalAssets, opts.NoResultSeconds, opts.NoResultMinFindings, opts.NoResultMinSeverity).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
 		return nil, err
 	}
 	if err := insertTaskRelations(tx, t.ID, opts.SourceTaskIDs); err != nil {
@@ -427,11 +473,11 @@ func insertTaskLLMProfiles(tx *sql.Tx, taskID int64, profileIDs []int64) error {
 
 const taskCols = `id, COALESCE(name,''), remark, category_id,
 COALESCE((SELECT category.name FROM task_categories category WHERE category.id=tasks.category_id),''),
-description, goal, exploration_id, status, paused, COALESCE(pause_reason,''), queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), share_global_assets, COALESCE(worker_count,0), first_run_at, deadline_at, COALESCE(active_run_seconds,0), run_segment_started_at, no_result_seconds, no_result_min_findings, no_result_min_severity, no_result_base_seconds, no_result_checked_at, stop_reason`
+description, goal, COALESCE(hard_requirement,''), exploration_id, status, paused, COALESCE(pause_reason,''), queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), share_global_assets, COALESCE(worker_count,0), first_run_at, deadline_at, COALESCE(active_run_seconds,0), run_segment_started_at, no_result_seconds, no_result_min_findings, no_result_min_severity, no_result_base_seconds, no_result_checked_at, stop_reason`
 
 func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
-	if err := sc.Scan(&t.ID, &t.Name, &t.Remark, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.PauseReason, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.ShareGlobalAssets, &t.WorkerCount, &t.FirstRunAt, &t.DeadlineAt, &t.ActiveRunSeconds, &t.RunSegmentStartedAt, &t.NoResultSeconds, &t.NoResultMinFindings, &t.NoResultMinSeverity, &t.NoResultBaseSeconds, &t.NoResultCheckedAt, &t.StopReason); err != nil {
+	if err := sc.Scan(&t.ID, &t.Name, &t.Remark, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.HardRequirement, &t.ExplorationID, &t.Status, &t.Paused, &t.PauseReason, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.ShareGlobalAssets, &t.WorkerCount, &t.FirstRunAt, &t.DeadlineAt, &t.ActiveRunSeconds, &t.RunSegmentStartedAt, &t.NoResultSeconds, &t.NoResultMinFindings, &t.NoResultMinSeverity, &t.NoResultBaseSeconds, &t.NoResultCheckedAt, &t.StopReason); err != nil {
 		return nil, err
 	}
 	t.Pinned = t.PinnedAt != nil

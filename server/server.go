@@ -206,6 +206,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		return s.llmOn
 	})
 	s.engine.SetProxyFailureHandler(s.handleProxyFailure)
+	s.engine.SetHardRequirementCheck(s.checkTaskHardRequirement)
 	if m.traffic != nil {
 		m.traffic.SetUpstreamFailureHandler(s.handleProxyTrafficFailure)
 	}
@@ -310,6 +311,10 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 			}
 		}
 		s.seedCredentialProcessor()
+		s.seedProxyHunter()
+		s.seedProxyHunterV2()
+		s.seedProxyHunterV3()
+		s.seedProxyHunterV4()
 		go s.runCredentialProcessor()
 	}
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
@@ -842,6 +847,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/task-templates/{id}", s.pgDeleteTaskTemplate)
 	mux.HandleFunc("GET /api/tasks/{id}", s.getTask)
 	mux.HandleFunc("PATCH /api/tasks/{id}", s.updateTaskMetadata)
+	mux.HandleFunc("PUT /api/tasks/{id}/hard-requirement", s.updateTaskHardRequirement)
 	mux.HandleFunc("PATCH /api/tasks/{id}/category", s.updateTaskCategory)
 	// 任务级资产拦截/允许规则
 	mux.HandleFunc("GET /api/tasks/{id}/intercept-rules", s.taskInterceptListRules)
@@ -1021,6 +1027,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/settings/proxy-pool/{id}/test", s.testProxyPoolEntry)
 	mux.HandleFunc("POST /api/settings/proxy-pool/test-all", s.testAllProxyPool)
 	mux.HandleFunc("POST /api/settings/proxy-pool/{id}/activate", s.activateProxyPool)
+	mux.HandleFunc("GET /api/settings/proxy-sources", s.listProxySources)
+	mux.HandleFunc("POST /api/settings/proxy-sources", s.createProxySource)
+	mux.HandleFunc("PUT /api/settings/proxy-sources/{id}", s.updateProxySource)
+	mux.HandleFunc("DELETE /api/settings/proxy-sources/{id}", s.deleteProxySource)
 	mux.HandleFunc("POST /api/tasks/{id}/proxy/test", s.testTaskProxy)
 	mux.HandleFunc("GET /api/report", s.getReport)
 	mux.HandleFunc("GET /api/chat/mentions", s.searchChatMentions)
@@ -1038,6 +1048,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/conversations/delete/batch", s.pgDeleteConversationsBatch)
 	mux.HandleFunc("PATCH /api/conversations/{id}", s.pgRenameConversation)
 	mux.HandleFunc("PATCH /api/conversations/{id}/profile", s.pgUpdateConversation)
+	mux.HandleFunc("PUT /api/conversations/{id}/hard-requirement", s.pgUpdateConversationHardRequirement)
 	mux.HandleFunc("DELETE /api/conversations/{id}", s.pgDeleteConversation)
 	mux.HandleFunc("GET /api/conversations/{id}/messages", s.pgConversationMessages)
 	mux.HandleFunc("POST /api/conversations/{id}/messages", s.pgSendConversationMessage)
@@ -1713,10 +1724,11 @@ type createTaskReq struct {
 	CategoryID           *int64           `json:"category_id,omitempty"`
 	Description          string           `json:"description"`
 	Goal                 string           `json:"goal"`
-	LLMProfileID         *int64           `json:"llm_profile_id,omitempty"`  // 指定运行本任务的 LLM 配置;省略/null=用激活配置
-	LLMProfileIDs        []int64          `json:"llm_profile_ids,omitempty"` // 有序任务级配置链;第一项初始生效
-	SourceTaskIDs        []string         `json:"source_task_ids,omitempty"` // 仅直接、只读继承的来源任务
-	CompanyIDs           []int64          `json:"company_ids,omitempty"`     // 关联企业范围并快照关联当前企业资产;不复制资产或强制生成意图
+	HardRequirement      string           `json:"hard_requirement,omitempty"` // 操作员硬性要求；Agent 无写入通道
+	LLMProfileID         *int64           `json:"llm_profile_id,omitempty"`   // 指定运行本任务的 LLM 配置;省略/null=用激活配置
+	LLMProfileIDs        []int64          `json:"llm_profile_ids,omitempty"`  // 有序任务级配置链;第一项初始生效
+	SourceTaskIDs        []string         `json:"source_task_ids,omitempty"`  // 仅直接、只读继承的来源任务
+	CompanyIDs           []int64          `json:"company_ids,omitempty"`      // 关联企业范围并快照关联当前企业资产;不复制资产或强制生成意图
 	NoResultSeconds      int              `json:"no_result_seconds"`
 	NoResultMinFindings  int              `json:"no_result_min_findings"`
 	NoResultMinSeverity  string           `json:"no_result_min_severity"`
@@ -1808,8 +1820,9 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := s.m.CreateTaskWithOptions(req.Description, req.Goal, db.TaskCreateOptions{
-		Schedule: schedule,
-		Name:     strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
+		HardRequirement: req.HardRequirement,
+		Schedule:        schedule,
+		Name:            strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
 		SourceTaskIDs: sourceIDs, CompanyIDs: req.CompanyIDs, LLMProfileIDs: req.LLMProfileIDs,
 		NoResultSeconds: req.NoResultSeconds, NoResultMinFindings: req.NoResultMinFindings, NoResultMinSeverity: req.NoResultMinSeverity,
 		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,

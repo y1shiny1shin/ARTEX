@@ -385,12 +385,16 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// The run-wide intent is not the current tool action. Do not forward it or
 	// inherit a parent run's background into the action reviewer.
 	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
+	if req := reviewHardRequirement(ts); req != "" {
+		ctx = intercept.WithReviewHardRequirement(ctx, req)
+	}
 	overview := renderWorkerGraphOverview(tsx.graphOverviewData())
 	proxyAddr := w.proxyAddr
 	if w.proxyAddrFn != nil {
 		proxyAddr = w.proxyAddrFn()
 	}
 	sysBody := workerSystem(proxyAddr, w.proxyCACert, w.workDir, runDir)
+	sysBody += hardRequirementBlock(ts)
 	if w.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,worker 执行时严格遵守
 	}

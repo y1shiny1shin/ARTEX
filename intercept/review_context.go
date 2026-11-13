@@ -36,12 +36,25 @@ type ReviewScript struct {
 
 // ReviewInput contains only the current call and explicitly selected background.
 // Execution history and call correlation belong to the separate audit record.
+// RuleHit is the rule-layer triage result for the current call. It is input to
+// the reviewer, never a final verdict: a broad keyword/regex can match a benign
+// command, and the reviewer must judge the actual technical effect.
+type RuleHit struct {
+	Name    string `json:"name"`
+	Action  string `json:"action"`
+	Message string `json:"message,omitempty"`
+	Decoded bool   `json:"decoded,omitempty"`
+}
+
 type ReviewInput struct {
 	Version             int               `json:"version"`
 	WorkingDir          string            `json:"working_directory,omitempty"`
+	HardRequirement     string            `json:"hard_requirement,omitempty"`
+	Rule                *RuleHit          `json:"rule_hit,omitempty"`
 	Background          *ReviewBackground `json:"background,omitempty"`
 	ScriptCaptureStatus string            `json:"script_capture_status,omitempty"`
 	Scripts             []ReviewScript    `json:"script_files,omitempty"`
+	Decoded             []DecodedPayload  `json:"decoded_payloads,omitempty"`
 	Tool                string            `json:"tool_name"`
 	Arguments           json.RawMessage   `json:"arguments"`
 	EvidenceTruncated   bool              `json:"evidence_truncated,omitempty"`
@@ -49,15 +62,37 @@ type ReviewInput struct {
 
 type reviewContextKey struct{}
 type reviewEnvironment struct {
-	workingDir string
-	background ReviewBackground
+	workingDir      string
+	background      ReviewBackground
+	hardRequirement string
+	ruleHit         *RuleHit
 }
 
 // WithReviewContext explicitly binds the permitted background for one run. Never
 // fall back to the raw turn transcript: it may contain the full scheduler prompt.
 // This is application wiring, not a model-callable tool.
 func WithReviewContext(ctx context.Context, workingDir string, background ReviewBackground) context.Context {
-	return context.WithValue(ctx, reviewContextKey{}, reviewEnvironment{workingDir, background})
+	return context.WithValue(ctx, reviewContextKey{}, reviewEnvironment{workingDir: workingDir, background: background})
+}
+
+// WithReviewHardRequirement binds the operator-authored hard requirement for one
+// run. It is a separate field from Background on purpose: background may contain
+// untrusted text, but the hard requirement is a human policy that can only
+// restrict the action. The interceptor never reads it from chat history.
+func WithReviewHardRequirement(ctx context.Context, text string) context.Context {
+	env, _ := ctx.Value(reviewContextKey{}).(reviewEnvironment)
+	env.hardRequirement = strings.TrimSpace(text)
+	return context.WithValue(ctx, reviewContextKey{}, env)
+}
+
+// WithReviewRuleHit binds the rule-layer triage result for one review. The
+// judge uses it to understand why the call entered review, but must still judge
+// the actual technical effect; it can clear a false-positive ask rule.
+func WithReviewRuleHit(ctx context.Context, hit RuleHit) context.Context {
+	env, _ := ctx.Value(reviewContextKey{}).(reviewEnvironment)
+	copy := hit
+	env.ruleHit = &copy
+	return context.WithValue(ctx, reviewContextKey{}, env)
 }
 
 // WithReviewWorkingDirectory preserves only explicitly selected background.
@@ -76,6 +111,11 @@ func BuildReviewInput(ctx context.Context, tool string, arguments json.RawMessag
 	in := ReviewInput{Version: 5, Tool: tool, Arguments: append(json.RawMessage(nil), arguments...)}
 	if env, ok := ctx.Value(reviewContextKey{}).(reviewEnvironment); ok {
 		in.WorkingDir = env.workingDir
+		in.HardRequirement = env.hardRequirement
+		if env.ruleHit != nil {
+			copy := *env.ruleHit
+			in.Rule = &copy
+		}
 		background := env.background
 		if background.Source == BackgroundUserMessage && strings.TrimSpace(background.Text) != "" {
 			var cut bool
@@ -85,5 +125,12 @@ func BuildReviewInput(ctx context.Context, tool string, arguments json.RawMessag
 		}
 	}
 	in.Scripts, in.ScriptCaptureStatus = captureScripts(in.WorkingDir, tool, arguments)
+	sources := []string{string(in.Arguments)}
+	for _, s := range in.Scripts {
+		if s.Content != "" {
+			sources = append(sources, s.Content)
+		}
+	}
+	in.Decoded = DecodePayloads(sources)
 	return in, nil
 }

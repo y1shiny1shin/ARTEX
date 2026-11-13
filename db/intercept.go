@@ -230,8 +230,8 @@ func scanInterceptApprovalRow(rows interface{ Scan(...any) error }, r *Intercept
 const approvalDecisionSource = `CASE
  WHEN ip.audit->>'decision_reason' LIKE '人工允许%' OR ip.audit->>'decision_reason' LIKE '人工拒绝%' THEN 'manual'
  ELSE COALESCE(NULLIF(ip.decision_source,''), CASE
-   WHEN ip.rule_id IS NOT NULL THEN 'rule'
-   WHEN ip.reason LIKE '[模型]%' THEN 'model' ELSE 'unknown' END)
+   WHEN ip.reason LIKE '[模型]%' THEN 'model'
+   WHEN ip.rule_id IS NOT NULL THEN 'rule' ELSE 'unknown' END)
  END`
 
 const approvalRowColumns = `ip.id, ip.rule_id, ip.conversation_id, ip.task_id, ip.agent_name,
@@ -250,11 +250,14 @@ const approvalRowSelect = `SELECT ` + approvalRowColumns + approvalRowJoins
 const approvalRowSelectWithAudit = `SELECT ` + approvalRowColumns + `, ip.audit` + approvalRowJoins
 
 func interceptSource(ruleID int64, reason string) string {
-	if ruleID != 0 {
-		return "rule"
-	}
+	// A rule can be only triage: when the LLM reviewed the hit, the reason starts
+	// with "[模型]" and the source must be model even though rule_id is preserved
+	// for the rule snapshot/audit.
 	if strings.HasPrefix(reason, "[模型]") {
 		return "model"
+	}
+	if ruleID != 0 {
+		return "rule"
 	}
 	return "unknown"
 }

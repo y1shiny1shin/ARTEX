@@ -1,0 +1,15 @@
+# Compose override for the RyAgent build. Use with the upstream compose file:
+#   docker compose -f docker-compose.yml -f docker-compose.ry.yml up -d artex
+#
+# - artex:ry is rebuilt from deploy/Dockerfile.ry (only the app binary changes).
+# - keys/ is a persistent, agent-invisible directory for jwt.key, so recreating
+#   the container does not invalidate every login session.
+# - host.docker.internal lets the agent reach host-local test targets (ZenTao).
+services:
+  artex:
+    image: artex:ry
+    command: ["-addr", ":8787", "-proxy", ":8788", "-keydir", "/app/keys"]
+    volumes:
+      - ./keys:/app/keys
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

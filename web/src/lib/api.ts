@@ -79,6 +79,7 @@ import type {
   PromptVar,
   PromptVersion,
   ProxyPoolEntry,
+  ProxySource,
   ProxySwitchLog,
   RepeaterSendRequest,
   RepeaterSendResponse,
@@ -385,6 +386,7 @@ export const api = {
     categoryId?: number;
     description: string;
     goal: string;
+    hardRequirement?: string;
     llmProfileIds?: number[];
     sourceTaskIds?: string[];
     companyIds?: number[];
@@ -406,6 +408,7 @@ export const api = {
       category_id: input.categoryId ?? null,
       description: input.description,
       goal: input.goal,
+      hard_requirement: input.hardRequirement ?? "",
       llm_profile_ids: input.llmProfileIds ?? [],
       source_task_ids: input.sourceTaskIds ?? [],
       company_ids: input.companyIds ?? [],
@@ -438,6 +441,8 @@ export const api = {
     input: { name?: string; pinned?: boolean; remark?: string; share_global_assets?: boolean },
   ) => patch<Task>(`/tasks/${id}`, input),
   renameTask: (id: string, name: string) => patch<Task>(`/tasks/${id}`, { name }),
+  updateTaskHardRequirement: (id: string, text: string, password: string) =>
+    put<Task>(`/tasks/${id}/hard-requirement`, { text, password }),
   pinTask: (id: string, pinned: boolean) => patch<Task>(`/tasks/${id}`, { pinned }),
   createTaskCategory: (name: string) => post<TaskCategory>("/task-categories", { name }),
   renameTaskCategory: (id: number, name: string) => patch<TaskCategory>(`/task-categories/${id}`, { name }),
@@ -1141,6 +1146,31 @@ export const api = {
       `/settings/proxy-pool/${encodeURIComponent(id)}/activate`,
       {},
     ),
+  proxySources: () => get<{ sources: ProxySource[] }>("/settings/proxy-sources").then((r) => arr(r.sources)),
+  createProxySource: (input: {
+    name: string;
+    kind: "http_list" | "fofa" | "hunter";
+    url?: string;
+    query?: string;
+    email?: string;
+    key?: string;
+    pages?: number;
+    enabled?: boolean;
+  }) => post<ProxySource>("/settings/proxy-sources", input),
+  updateProxySource: (
+    id: number,
+    input: {
+      name: string;
+      kind: "http_list" | "fofa" | "hunter";
+      url?: string;
+      query?: string;
+      email?: string;
+      key?: string;
+      pages?: number;
+      enabled?: boolean;
+    },
+  ) => put<ProxySource>(`/settings/proxy-sources/${id}`, input),
+  deleteProxySource: (id: number) => del<{ deleted: number }>(`/settings/proxy-sources/${id}`),
   testTaskProxy: (taskID: string) => post<{ ok: boolean; error?: string }>(`/tasks/${taskID}/proxy/test`, {}),
 
   // ---- 漏洞 IM 推送 ----
@@ -1342,6 +1372,8 @@ export const api = {
   pinConversation: (id: number, pinned: boolean) => patch<Conversation>(`/conversations/${id}`, { pinned }),
   updateConversationProfile: (id: number, llm_profile_id: number | null) =>
     patch<{ ok: boolean }>(`/conversations/${id}/profile`, { llm_profile_id }),
+  updateConversationHardRequirement: (id: number, text: string, password: string) =>
+    put<Conversation>(`/conversations/${id}/hard-requirement`, { text, password }),
   deleteConversation: (id: number) => del<{ deleted: number }>(`/conversations/${id}`),
   deleteConversations: (ids: number[]) =>
     post<{ items: { id: number; ok: boolean; error?: string }[] }>("/conversations/delete/batch", { ids }),

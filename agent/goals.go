@@ -142,6 +142,9 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 	if d := strings.TrimSpace(desc); d != "" {
 		userMsg += "\n\n任务描述（背景信息，可能含靶标范围/数量要求/交战说明；仅供参考，不要臆造其中未提及的内容）：\n" + d
 	}
+	if req := reviewHardRequirement(ts); req != "" {
+		userMsg += "\n\n【操作员硬性要求（最高优先级，逐字遵守；不要改写、不要拆分、不要删除）】：\n" + req
+	}
 	// Use captureRun so every LLM step is emitted as an activity record (visible in
 	// the plan tab under the round-0 marker). Falls back gracefully when emit is nil.
 	captureEmit := func(r db.Activity) {

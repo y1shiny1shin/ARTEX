@@ -281,6 +281,9 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV3(); err != nil {
 		return fmt.Errorf("seed intercept rules v3: %w", err)
 	}
+	if err := d.seedDefaultInterceptRulesV4(); err != nil {
+		return fmt.Errorf("seed intercept rules v4: %w", err)
+	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)
 	}
@@ -616,4 +619,47 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 		return fmt.Errorf("rule %q: %w", name, err)
 	}
 	return d.SetSetting("intercept_default_rules_v3", "done")
+}
+
+// seedDefaultInterceptRulesV4 adds the encoded/pipe-to-interpreter rules. These
+// are the deterministic half of the "base64 bypass" fix: the LLM judge is the
+// other half (it receives decoded_payloads), but a clear pipe-to-shell should
+// not depend on the model being available or correct. Own flag so existing DBs
+// get the rules without re-running (or overwriting) earlier seeds.
+func (d *DB) seedDefaultInterceptRulesV4() error {
+	if v, _, _ := d.GetSetting("intercept_default_rules_v4"); v == "done" {
+		return nil
+	}
+	rules := []struct {
+		name    string
+		pattern string
+		message string
+	}{
+		{
+			name:    "[内置] 管道进入解释器",
+			pattern: `(?i)\b(?:cat|curl|wget|echo|printf|tar|unzip|base64|xxd|openssl)\b[^|\n]{0,400}\|\s*(?:(?:ba|z|k|da)?sh\b|python[0-9.]*\b|perl\b|ruby\b|node\b)`,
+			message: "检测到管道进入解释器（| sh/bash/python/perl/node 等）。远程或解码后的内容会绕过参数审查直接执行，需人工确认。",
+		},
+		{
+			name:    "[内置] 解码后执行",
+			pattern: `(?i)\b(?:base64\s+(?:-d|--decode)|xxd\s+-r|openssl\s+enc\s+-d)\b[^|\n]{0,400}\|\s*(?:(?:ba|z|k|da)?sh\b|python[0-9.]*\b|perl\b|ruby\b|node\b)`,
+			message: "检测到解码后直接执行（base64/xxd/openssl 解码结果进入解释器），关键词规则可能看不到真实内容，需人工确认。",
+		},
+		{
+			name:    "[内置] eval/source 动态输入",
+			pattern: `(?i)\b(?:eval|source)\s+[\"']?(?:\$\(|<\(|\$\{)`,
+			message: "检测到 eval/source 执行动态输入，静态审查无法看到实际内容，需人工确认。",
+		},
+	}
+	for _, r := range rules {
+		if _, err := d.Exec(`
+INSERT INTO intercept_rules(name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action)
+SELECT $1, true, 95, 'tool_input', 'regex', $2, 'ask', $3, true, 300, 'deny'
+WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
+			r.name, r.pattern, r.message,
+		); err != nil {
+			return fmt.Errorf("rule %q: %w", r.name, err)
+		}
+	}
+	return d.SetSetting("intercept_default_rules_v4", "done")
 }

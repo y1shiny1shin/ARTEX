@@ -38,6 +38,7 @@ type Task struct {
 	PinnedAt            int64  `json:"pinned_at,omitempty"`
 	Description         string `json:"description"`
 	Goal                string `json:"goal"`
+	HardRequirement     string `json:"hard_requirement"`
 	CreatedAt           int64  `json:"created_at"`
 	CompletedAt         int64  `json:"completed_at,omitempty"` // 进入终态的 unix 秒;0=未完成
 	Paused              bool   `json:"paused"`
@@ -1160,7 +1161,7 @@ func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Inter
 		Remark:     pt.Remark,
 		CategoryID: cloneInt64Ptr(pt.CategoryID), CategoryName: pt.CategoryName,
 		PinnedAt:    unixOrZero(pt.PinnedAt),
-		Description: pt.Description, Goal: pt.Goal, CreatedAt: pt.CreatedAt.Unix(), Paused: pt.Paused, PauseReason: pt.PauseReason, Queued: pt.Queued,
+		Description: pt.Description, Goal: pt.Goal, HardRequirement: pt.HardRequirement, CreatedAt: pt.CreatedAt.Unix(), Paused: pt.Paused, PauseReason: pt.PauseReason, Queued: pt.Queued,
 		QueuedAt: unixNanoOrZero(pt.QueuedAt), QueueMode: pt.QueueMode,
 		CompletedAt: unixOrZero(pt.CompletedAt), Status: pt.Status, ParentRef: pt.ParentRef,
 		LLMProfileID:  pt.LLMProfileID,

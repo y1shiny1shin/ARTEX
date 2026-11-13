@@ -23,9 +23,12 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type {
@@ -106,8 +109,14 @@ function StatCard({
 
 export function OverviewTab({ taskId }: { taskId: string }) {
   const { ui } = useUITranslation();
+  const { t: translate } = useLiveTranslation();
 
   const [task, setTask] = React.useState<Task | null>(null);
+  const [hardReqEditing, setHardReqEditing] = React.useState(false);
+  const [hardReqDraft, setHardReqDraft] = React.useState("");
+  const [hardReqPassword, setHardReqPassword] = React.useState("");
+  const [hardReqSaving, setHardReqSaving] = React.useState(false);
+  const [hardReqErr, setHardReqErr] = React.useState("");
   const [stats, setStats] = React.useState<Stats | null>(null);
   const [intents, setIntents] = React.useState<TaskNode[]>([]);
   const [findings, setFindings] = React.useState<Finding[]>([]);
@@ -165,6 +174,21 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       // 忽略：无 asset store 时接口 503，范围卡片自然为空
     }
   }, [taskId]);
+
+  const saveHardRequirement = async () => {
+    setHardReqSaving(true);
+    setHardReqErr("");
+    try {
+      const updated = await api.updateTaskHardRequirement(taskId, hardReqDraft.trim(), hardReqPassword);
+      setTask((prev) => (prev ? { ...prev, hard_requirement: updated.hard_requirement } : prev));
+      setHardReqEditing(false);
+      setHardReqPassword("");
+    } catch (e) {
+      setHardReqErr(e instanceof Error ? e.message : translate("taskUI.hardRequirementSaveFailed"));
+    } finally {
+      setHardReqSaving(false);
+    }
+  };
 
   const loadGoals = React.useCallback(async () => {
     try {
@@ -451,6 +475,75 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             <div className="text-xs font-medium text-muted-foreground">{ui("screen.57060c88a36bf3")}</div>
             <p className="text-sm whitespace-pre-wrap break-words">{task?.goal?.trim() || "—"}</p>
           </div>
+        </CardContent>
+      </Card>
+      {/* 硬性要求：人工设定、模型无写入通道；每次规划/执行与拦截裁判都会逐字读取。 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldAlertIcon className="size-4 text-primary" /> {translate("taskUI.hardRequirement")}
+          </CardTitle>
+          <CardDescription>{translate("taskUI.hardRequirementHelp")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {hardReqEditing ? (
+            <div className="flex flex-col gap-2">
+              <Textarea
+                className="min-h-28"
+                value={hardReqDraft}
+                onChange={(e) => setHardReqDraft(e.target.value)}
+                placeholder={translate("taskUI.hardRequirementExample")}
+              />
+              <div className="grid gap-2">
+                <Label htmlFor="hard-req-password">{translate("taskUI.hardRequirementPassword")}</Label>
+                <Input
+                  id="hard-req-password"
+                  type="password"
+                  value={hardReqPassword}
+                  onChange={(e) => setHardReqPassword(e.target.value)}
+                  placeholder={translate("taskUI.hardRequirementPassword")}
+                  autoComplete="current-password"
+                />
+                <p className="text-muted-foreground text-xs">{translate("taskUI.hardRequirementPasswordHelp")}</p>
+              </div>
+              {hardReqErr ? <p className="text-destructive text-xs">{hardReqErr}</p> : null}
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => void saveHardRequirement()} disabled={hardReqSaving}>
+                  {translate("taskUI.save")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setHardReqEditing(false);
+                    setHardReqErr("");
+                    setHardReqPassword("");
+                  }}
+                  disabled={hardReqSaving}
+                >
+                  {translate("taskUI.cancel")}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <p className="text-sm whitespace-pre-wrap break-words">
+                {task?.hard_requirement?.trim() || translate("taskUI.hardRequirementEmpty")}
+              </p>
+              <div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setHardReqDraft(task?.hard_requirement ?? "");
+                    setHardReqEditing(true);
+                  }}
+                >
+                  <PencilIcon className="size-4" /> {translate("taskUI.hardRequirementEdit")}
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
       {/* 目标管理：查看/新增/修改/删除本任务的探索目标。新增与修改会通知规划者并复活任务，

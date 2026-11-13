@@ -144,6 +144,8 @@ var defaultEnabledTools = []string{
 	"Bash", "WebFetch", "web_search",
 	"shell_open", "shell_send",
 	"Write", "Edit", "MultiEdit",
+	"proxy_harvest",
+	"proxy_hunt",
 }
 
 // New creates an Interceptor backed by d. The rule cache is lazy-loaded on
@@ -286,6 +288,7 @@ type Decision struct {
 	ModelInput       json.RawMessage
 	ModelInputDigest string
 	ModelFallback    bool
+	Decoded          bool
 	RuleName         string
 	ConfigDigest     string
 	ProfileID        int64
@@ -347,7 +350,7 @@ type JudgeConfig struct {
 // follows dwarfs a few KV reads, and freshness avoids a cache-invalidation path.
 func (i *Interceptor) judgeConfig() JudgeConfig {
 	c := JudgeConfig{
-		Enabled:                i.db.GetBool(settingJudgeEnabled, false),
+		Enabled:                i.db.GetBool(settingJudgeEnabled, true),
 		ProfileID:              int64(i.getSettingInt(settingJudgeProfileID, 0)),
 		TimeoutSeconds:         i.getSettingInt(settingJudgeTimeoutSecs, defaultJudgeTimeoutSecs),
 		RetryCount:             min(max(i.getSettingInt(settingJudgeRetryCount, defaultJudgeRetryCount), 0), MaxJudgeRetryCount),
@@ -543,6 +546,35 @@ func (i *Interceptor) Judge(ctx context.Context, tool string, arguments json.Raw
 	return out, true
 }
 
+// ReviewMatchedAsk sends a rule-layer "ask" verdict to the LLM judge. The rule
+// layer is triage, not final: a broad keyword/regex can match a benign command
+// (for example `curl GET ... | python3 -m json.tool | head`). The judge sees the
+// rule hit and may allow, ask, or deny. Only ask rules are re-reviewed here:
+// explicit allow rules stay explicit, and hard deny rules stay final.
+func (i *Interceptor) ReviewMatchedAsk(ctx context.Context, tool string, arguments json.RawMessage, dec Decision) (Decision, bool) {
+	if dec.Action != "ask" {
+		return Decision{}, false
+	}
+	ctx = WithReviewRuleHit(ctx, RuleHit{Name: dec.RuleName, Action: dec.Action, Message: dec.Message, Decoded: dec.Decoded})
+	judged, ok := i.Judge(ctx, tool, arguments)
+	if !ok {
+		return Decision{}, false
+	}
+	judged.RuleID = dec.RuleID
+	judged.RuleName = dec.RuleName
+	judged.Decoded = judged.Decoded || dec.Decoded
+	if judged.Message == "" {
+		judged.Message = "[模型] 规则分诊后复核"
+	} else if !strings.HasPrefix(judged.Message, "[模型]") {
+		judged.Message = "[模型] " + judged.Message
+	}
+	if dec.RuleName != "" && !strings.Contains(judged.Message, dec.RuleName) {
+		body := strings.TrimPrefix(judged.Message, "[模型] ")
+		judged.Message = "[模型] 规则[" + dec.RuleName + "]分诊后复核：" + body
+	}
+	return judged, true
+}
+
 func applyIncompleteScriptPolicy(input ReviewInput, out Decision, policy string) Decision {
 	if input.ScriptCaptureStatus == "incomplete" && policy != "model" && out.Action == "allow" {
 		out.Action = "ask"
@@ -572,8 +604,31 @@ func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
 	if err != nil || len(rules) == 0 {
 		return Decision{}, false
 	}
+	if d, ok := matchRules(rules, toolName, input); ok {
+		return d, true
+	}
+	// Keyword rules can be bypassed by base64/hex/url/gzip wrapping. Decode the
+	// arguments deterministically and re-run the same rules over the decoded text.
+	// A decoded-only hit is escalated to ASK, not DENY: decoding can produce
+	// coincidental text, so a human (or the LLM judge, which also sees the decoded
+	// payload) makes the final call.
+	for _, p := range DecodePayloads([]string{string(input)}) {
+		if d, ok := matchRules(rules, toolName, []byte(p.Text)); ok {
+			d.Action = "ask"
+			d.Decoded = true
+			d.Message = "[解码后命中] 原始参数未命中规则，但 " + p.Encoding + " 解码后命中规则 [" + d.RuleName + "]：" + d.Message + "；解码来源：" + p.Source + "。需人工确认。"
+			d.TimeoutEnabled = true
+			d.TimeoutSeconds = 300
+			d.TimeoutAction = "deny"
+			return d, true
+		}
+	}
+	return Decision{}, false
+}
+
+func matchRules(rules []compiledRule, toolName string, subject []byte) (Decision, bool) {
 	for _, r := range rules {
-		if ruleMatches(r, toolName, input) {
+		if ruleMatches(r, toolName, subject) {
 			msg := r.Message
 			if msg == "" {
 				msg = defaultMessage(r.Action, r.Name)

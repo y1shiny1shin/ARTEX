@@ -155,9 +155,20 @@ type Engine struct {
 	// Ready()/the llm_configured indicator. Wired once at startup; nil → not ready.
 	readiness    func() bool
 	proxyFailure func(taskID string, err error)
+	// hardRequirementCheck runs once when the planner declares all goals met,
+	// before the task can enter the terminal done state. It returns a non-empty
+	// violation reason to block completion, or an error when the check itself
+	// could not run (the task is then paused rather than silently completed).
+	hardRequirementCheck func(taskID string) (violation string, err error)
 }
 
 func (e *Engine) SetProxyFailureHandler(fn func(string, error)) { e.proxyFailure = fn }
+
+// SetHardRequirementCheck wires the pre-completion compliance review. nil = no
+// check (tasks without a hard requirement are unaffected).
+func (e *Engine) SetHardRequirementCheck(fn func(string) (string, error)) {
+	e.hardRequirementCheck = fn
+}
 
 type slotAvailability struct {
 	available bool
@@ -974,6 +985,26 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 				e.proxyFailure(t.ID, err)
 			}
 		case met:
+			// The planner only sees the model-facing prompt; the hard requirement is
+			// enforced here as a separate, one-shot compliance review. A violation
+			// blocks terminal completion and pauses the task for a human decision.
+			if e.hardRequirementCheck != nil {
+				if violation, checkErr := e.hardRequirementCheck(t.ID); checkErr != nil {
+					log.Printf("[planner] task %s 硬性要求复核失败: %v", t.ID, checkErr)
+					e.emitActivity(t, db.Activity{Worker: "planner", Kind: "text", IsError: true,
+						Summary: "硬性要求复核失败，任务已暂停（未收尾）：" + checkErr.Error()})
+					_ = e.m.ApplyTaskPauseOriginReason(t.ID, "paused_by_hard_requirement", false)
+					e.Pause(t.ID, errors.New("硬性要求复核失败"))
+					return
+				} else if violation != "" {
+					log.Printf("[planner] task %s 硬性要求未满足，拒绝收尾: %s", t.ID, violation)
+					e.emitActivity(t, db.Activity{Worker: "planner", Kind: "text", IsError: true,
+						Summary: "硬性要求未满足，任务已暂停（未收尾）：" + violation})
+					_ = e.m.ApplyTaskPauseOriginReason(t.ID, "paused_by_hard_requirement", false)
+					e.Pause(t.ID, errors.New("硬性要求未满足"))
+					return
+				}
+			}
 			log.Printf("[planner] task %s 判定目标达成: %s", t.ID, reason)
 			// 所有目标达成 → 持久化任务状态为 done（前端 DTO 会优先展示该终态）。
 			if err := e.m.SetTaskStatus(t.ID, "done"); err != nil {

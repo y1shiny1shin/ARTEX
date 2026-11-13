@@ -186,6 +186,18 @@ func (d *DB) Exploration(id int64) *ExplorationStore { return &ExplorationStore{
 
 func (s *ExplorationStore) ID() int64 { return s.expID }
 
+// HardRequirement returns the operator-authored hard requirement of the task
+// that owns this exploration. It is read fresh on every prompt build so a human
+// edit applies to the next round; it is never writable through the graph store.
+func (s *ExplorationStore) HardRequirement() (string, error) {
+	var text string
+	err := s.db.QueryRow(`SELECT COALESCE(hard_requirement,'') FROM tasks WHERE exploration_id=$1 AND deleted_at IS NULL LIMIT 1`, s.expID).Scan(&text)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return text, err
+}
+
 // Root returns the exploration's description and goal.
 func (s *ExplorationStore) Root() (description, goal string, err error) {
 	var d sql.NullString

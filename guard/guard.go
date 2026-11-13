@@ -89,7 +89,15 @@ func (g *Guard) applyIntercept(ctx context.Context, ev hook.Event) hook.Result {
 	}
 	ctx = intercept.WithCall(ctx, ev.ToolName, ev.Input)
 	dec, matched := g.interceptor.Match(ev.ToolName, ev.Input)
-	if !matched {
+	if matched {
+		// Rule hit is triage, not final. An "ask" rule (including our broad
+		// pipe-to-interpreter tripwire) is re-reviewed by the LLM so a benign
+		// `curl GET | python3 -m json.tool` is not forced through human approval.
+		// Allow rules stay explicit; hard deny rules stay final.
+		if reviewed, ok := g.interceptor.ReviewMatchedAsk(ctx, ev.ToolName, ev.Input, dec); ok {
+			dec = reviewed
+		}
+	} else {
 		// No rule matched. Ask the LLM fallback judge (if enabled); when it is off
 		// or unwired, keep current behavior and allow.
 		d, judged := g.interceptor.Judge(ctx, ev.ToolName, ev.Input)

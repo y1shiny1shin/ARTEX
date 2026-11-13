@@ -31,6 +31,7 @@ import type { EgressReport, LLMProfile, ProxyPoolEntry, Settings, WorkerPool } f
 
 import { useEgressIp } from "../../_components/egress-ip-banner";
 import { BasicAuthCard } from "./_components/basic-auth-card";
+import { ProxySourcesCard } from "./_components/proxy-sources-card";
 import { UpdateCard } from "./_components/update-card";
 
 export default function SystemSettingsPage() {
@@ -1322,6 +1323,8 @@ export default function SystemSettingsPage() {
                 </section>
               </CardContent>
             </Card>
+
+            {isSettingVisible("traffic", "settings.keywords.proxySources") ? <ProxySourcesCard /> : null}
 
             <Card
               className={`${isSettingVisible("agent", "settings.keywords.constraints") ? "" : "hidden"} mb-4 break-inside-avoid md:mb-6`}

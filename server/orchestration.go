@@ -40,6 +40,8 @@ func jsonResult(v any) (actool.Result, error) {
 //nolint:unused // used as the hostTools provider in wireAgentAugment
 func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 	tools := append(s.m.HostTools(), s.orchestrationTools()...)
+	tools = append(tools, s.toolProxyHarvest())
+	tools = append(tools, s.toolProxyHunt())
 	tools = append(tools, s.findingRetestTools()...)
 	tools = append(tools, s.platformTools()...) // 平台操作工具(建改 skill/工具/MCP，给 Auto 用)
 	custom, err := s.customTools()
