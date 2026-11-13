@@ -1,71 +1,88 @@
-# backend
-/data/
-*.db
-*.db-wal
-*.db-shm
-config.json
-scheduler_state.json
-__pycache__/
-*.pyc
-*.pyo
-
-# frontend
-web/node_modules/
-web/.next/
-web/tsconfig.tsbuildinfo
-web/next-env.d.ts
-.vercel/
-web/public/demo-version.json
-*.local
-
-# development tools
-.playwright-mcp/
-.playwright-cli/
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# docs
+# ── RyAgent monorepo ─────────────────────────────────────────────
+# 设计文档、临时目录、缓存、凭证一律不入库
 /docs/
-
-# os
-.DS_Store
-Thumbs.db
-
-# claude code local state
-.claude/
-
-# 内嵌前端的单二进制产物
-/artex
-# 一键更新在可执行文件旁留下的中间产物（暂存件 / 备份 / 失败版本 / 升级标记）
-/artex.new
-/artex.new.sha256
-/artex.old
-/artex.failed
-/artex.upgrade.json
-/server/webui/dist/
-/dist/
-
-# JWT 签名密钥（运行时生成，存项目根，绝不提交）
-/jwt.key
-
-# Docker 部署生成的本地环境（含密码/密钥，不提交）
-.env
-
-# 调度器运行/模拟产生的事件日志（测试产物，不提交）
-*-events.csv
-
-# bench 基准测试相关（本地产物，不提交）
-/bench/
-/Dockerfile.bench
-/Dockerfile.bench.v2
-
-# RyAgent 本地工作区：设计文档、临时目录、缓存与凭证一律不入库
 /tmp/
 /.cache/
 *.md.bak
 设计*.md
 
-# RyAgent deployment secrets / runtime keys
+# ── ARTEX 组件（artex/）──────────────────────────────────────────
+/artex/data/
+/artex/*.db
+/artex/*.db-wal
+/artex/*.db-shm
+/artex/config.json
+/artex/scheduler_state.json
+/artex/__pycache__/
+/artex/*.pyc
+/artex/*.pyo
+/artex/web/node_modules/
+/artex/web/.next/
+/artex/web/out/
+/artex/web/tsconfig.tsbuildinfo
+/artex/web/next-env.d.ts
+/artex/.vercel/
+/artex/web/public/demo-version.json
+/artex/*.local
+/artex/.playwright-mcp/
+/artex/.playwright-cli/
+/artex/artex
+/artex/artex.new
+/artex/artex.new.sha256
+/artex/artex.old
+/artex/artex.failed
+/artex/artex.upgrade.json
+/artex/server/webui/dist/
+/artex/dist/
+/artex/jwt.key
+/artex/.env
+/artex/*-events.csv
+/artex/bench/
+/artex/Dockerfile.bench
+/artex/Dockerfile.bench.v2
+
+# ── BFF（bff/）───────────────────────────────────────────────────
+/bff/data/
+/bff/bin/
+/bff/ryagent-bff
+/bff/config.local.json
+/bff/.env
+/bff/.env.*
+
+# ── App（app/）──────────────────────────────────────────────────
+/app/node_modules/
+/app/.expo/
+/app/.expo-shared/
+/app/android/.gradle/
+/app/android/build/
+/app/android/app/build/
+/app/android/local.properties
+/app/ios/Pods/
+/app/ios/build/
+/app/dist/
+/app/.env
+/app/.env.*
+/app/*.keystore
+/app/*.jks
+
+# ── 部署与密钥 ──────────────────────────────────────────────────
 /keys/
+/deploy/.env
+/deploy/secrets/
+
+# ── 通用 ────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials*
+secrets*
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+node_modules/
