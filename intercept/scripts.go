@@ -72,6 +72,11 @@ func scriptReferencesBounded(command, dir string, depth int, remaining *int) []s
 	var refs []scriptReference
 	sourceInputs := map[*syntax.CallExpr]reviewSourceInput{}
 	generated := map[string]scriptReference{}
+	// copied maps a destination copied/moved by the current command to its
+	// source. The reviewer runs BEFORE execution, so `cp a.py b.py; python3 b.py`
+	// must read a.py; otherwise b.py does not exist yet and the snapshot is
+	// incomplete (which forces an avoidable human approval).
+	copied := map[string]string{}
 	topStatements := map[*syntax.Stmt]bool{}
 	var markStraightLine func(*syntax.Stmt)
 	markStraightLine = func(stmt *syntax.Stmt) {
@@ -133,21 +138,29 @@ func scriptReferencesBounded(command, dir string, depth int, remaining *int) []s
 		}
 		if !filepath.IsAbs(path) {
 			if dir == "" {
+				if src, known := copied[filepath.Clean(path)]; known {
+					path = src
+				}
 				if ref, known := generated[filepath.Clean(path)]; known {
 					ref.direct = direct
 					refs = append(refs, ref)
 					return
 				}
-
-				refs = append(refs, scriptReference{path: path, problem: "执行目录不确定，无法解析相对脚本路径"})
-				return
+				if !filepath.IsAbs(path) {
+					refs = append(refs, scriptReference{path: path, problem: "执行目录不确定，无法解析相对脚本路径"})
+					return
+				}
+			} else {
+				path = filepath.Join(dir, path)
 			}
-			path = filepath.Join(dir, path)
 		}
 		absolute, err := filepath.Abs(path)
 		if err != nil {
 			refs = append(refs, scriptReference{path: path, problem: "无法解析绝对路径"})
 			return
+		}
+		if src, ok := copied[absolute]; ok {
+			absolute = src
 		}
 		if ref, ok := generated[absolute]; ok {
 			ref.direct = direct
@@ -206,6 +219,10 @@ func scriptReferencesBounded(command, dir string, depth int, remaining *int) []s
 		}
 		trackWrites(stmt, args)
 		base := filepath.Base(name)
+		if base == "cp" || base == "mv" {
+			trackScriptCopy(args, dir, copied)
+			return true
+		}
 		if base == "cd" {
 			for path := range generated {
 				if !filepath.IsAbs(path) {
@@ -352,6 +369,76 @@ func scriptReferencesBounded(command, dir string, depth int, remaining *int) []s
 	})
 	return refs
 }
+
+// trackScriptCopy records `cp src dst` / `mv src dst` destinations so a later
+// interpreter call on dst is reviewed against the source file that exists now.
+// Only static words are used; dynamic paths are ignored (the snapshot stays
+// incomplete, which is the safe outcome).
+func trackScriptCopy(args []*syntax.Word, dir string, copied map[string]string) {
+	if len(args) < 3 {
+		return
+	}
+	var operands []string
+	for _, w := range args[1:] {
+		value, known := staticWord(w)
+		if !known {
+			return
+		}
+		if value == "--" {
+			continue
+		}
+		if strings.HasPrefix(value, "-") && len(operands) == 0 {
+			// -t/--target-directory changes the destination argument shape; do
+			// not guess.
+			if value == "-t" || strings.HasPrefix(value, "--target-directory") {
+				return
+			}
+			continue
+		}
+		operands = append(operands, value)
+	}
+	if len(operands) < 2 {
+		return
+	}
+	dst := operands[len(operands)-1]
+	sources := operands[:len(operands)-1]
+	dstIsDir := len(sources) > 1 || strings.HasSuffix(dst, "/")
+	if !dstIsDir && len(sources) == 1 {
+		if info, err := os.Stat(resolveCopyPath(dst, dir)); err == nil && info.IsDir() {
+			dstIsDir = true
+		}
+	}
+	if dstIsDir {
+		for _, src := range sources {
+			absSrc := resolveCopyPath(src, dir)
+			absDst := resolveCopyPath(filepath.Join(dst, filepath.Base(src)), dir)
+			if absSrc != "" && absDst != "" {
+				copied[absDst] = absSrc
+			}
+		}
+		return
+	}
+	absSrc := resolveCopyPath(sources[0], dir)
+	absDst := resolveCopyPath(dst, dir)
+	if absSrc != "" && absDst != "" {
+		copied[absDst] = absSrc
+	}
+}
+
+func resolveCopyPath(path, dir string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	if dir == "" {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(filepath.Join(dir, path))
+}
+
 func knownScriptExtension(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".sh", ".bash", ".zsh", ".fish", ".py", ".py3", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rb", ".pl", ".php", ".ps1", ".lua":

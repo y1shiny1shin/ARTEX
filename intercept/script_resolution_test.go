@@ -224,3 +224,33 @@ func TestGeneratedPipelineSnapshots(t *testing.T) {
 		t.Fatal("pipeline analysis executed a writer")
 	}
 }
+
+func TestScriptCopySourceSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "auth_probe.py")
+	content := "print('read-only probe')\n"
+	if err := os.WriteFile(src, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	command := "cd " + dir + "; cp auth_probe.py auth_probe_ref.py; " +
+		"sed -i 's/host.docker.internal/172.17.0.1/' auth_probe_ref.py; " +
+		"python3 auth_probe_ref.py 2>&1 | head -40"
+	in := reviewCommandForTest(t, dir, command)
+	if in.ScriptCaptureStatus != "complete" {
+		t.Fatalf("status=%s scripts=%+v", in.ScriptCaptureStatus, in.Scripts)
+	}
+	if len(in.Scripts) != 1 || in.Scripts[0].Path != src || in.Scripts[0].Content != content || !in.Scripts[0].Complete {
+		t.Fatalf("copy source snapshot not resolved: %+v", in.Scripts)
+	}
+}
+
+func TestScriptCopyFromGeneratedSource(t *testing.T) {
+	command := "cat > a.py <<'PY'\nprint('generated')\nPY\ncp a.py b.py\npython3 b.py"
+	in := reviewCommandForTest(t, "", command)
+	if in.ScriptCaptureStatus != "complete" {
+		t.Fatalf("status=%s scripts=%+v", in.ScriptCaptureStatus, in.Scripts)
+	}
+	if len(in.Scripts) != 1 || in.Scripts[0].Path != "a.py" || !strings.Contains(in.Scripts[0].Content, "generated") {
+		t.Fatalf("generated copy source not resolved: %+v", in.Scripts)
+	}
+}
