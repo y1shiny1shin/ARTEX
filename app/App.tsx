@@ -81,9 +81,12 @@ async function api<T>(base: string, token: string | null, path: string, init?: R
   return body as T;
 }
 
+declare const process: { env: Record<string, string | undefined> };
+const DEFAULT_BASE = process.env.EXPO_PUBLIC_BFF_URL ?? "http://127.0.0.1:8788";
+
 export default function App() {
   const [screen, setScreen] = React.useState<Screen>("pair");
-  const [base, setBase] = React.useState("http://127.0.0.1:8788");
+  const [base, setBase] = React.useState(DEFAULT_BASE);
   const [token, setToken] = React.useState<string | null>(null);
   const [password, setPassword] = React.useState("");
   const [deviceName, setDeviceName] = React.useState("Xiaomi 15");

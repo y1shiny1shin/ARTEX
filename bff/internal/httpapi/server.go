@@ -137,6 +137,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 502, err.Error())
 		return
 	}
+	redactTasks(tasks)
 	approvals, err := s.artex.Approvals(r.Context())
 	if err != nil {
 		writeErr(w, 502, err.Error())
@@ -160,6 +161,7 @@ func (s *Server) tasks(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 502, err.Error())
 		return
 	}
+	redactTasks(tasks)
 	writeJSON(w, 200, map[string]any{"tasks": tasks})
 }
 
@@ -182,6 +184,7 @@ func (s *Server) progressData(ctx context.Context, taskID string) (map[string]an
 	if err != nil {
 		return nil, err
 	}
+	redactTask(task)
 	stats, _ := s.artex.Stats(ctx, taskID)
 	// The task DTO does not always carry the live goal counters; active_task in
 	// /api/stats is the authoritative runtime view. Merge it into the task card.
@@ -197,6 +200,9 @@ func (s *Server) progressData(ctx context.Context, taskID string) (map[string]an
 	filtered := make([]map[string]any, 0)
 	for _, a := range approvals {
 		if fmt.Sprint(a["task_id"]) == taskID {
+			if v, ok := a["reason"].(string); ok {
+				a["reason"] = redactText(v)
+			}
 			filtered = append(filtered, a)
 		}
 	}
@@ -204,7 +210,7 @@ func (s *Server) progressData(ctx context.Context, taskID string) (map[string]an
 	running := 0
 	for _, in := range intents {
 		state := fmt.Sprint(in["state"])
-		summary := intentSummary(in)
+		summary := redactText(intentSummary(in))
 		writeIntents = append(writeIntents, map[string]any{
 			"id": in["id"], "state": state, "summary": summary,
 		})
