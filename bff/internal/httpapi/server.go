@@ -183,6 +183,15 @@ func (s *Server) progressData(ctx context.Context, taskID string) (map[string]an
 		return nil, err
 	}
 	stats, _ := s.artex.Stats(ctx, taskID)
+	// The task DTO does not always carry the live goal counters; active_task in
+	// /api/stats is the authoritative runtime view. Merge it into the task card.
+	if at, ok := stats["active_task"].(map[string]any); ok {
+		for _, k := range []string{"status", "paused", "goals_total", "goals_met", "in_flight", "findings"} {
+			if v, exists := at[k]; exists {
+				task[k] = v
+			}
+		}
+	}
 	intents, _ := s.artex.Intents(ctx, taskID)
 	approvals, _ := s.artex.Approvals(ctx)
 	filtered := make([]map[string]any, 0)
