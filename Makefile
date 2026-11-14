@@ -26,6 +26,7 @@ app-release:
 
 app-install:
 	$(ADB) connect 127.0.0.1:16384
+	$(ADB) -s 127.0.0.1:16384 reverse tcp:8788 tcp:8788
 	$(ADB) -s 127.0.0.1:16384 install -r $(APK)
 	$(ADB) -s 127.0.0.1:16384 shell am start -n com.y1shin.ryagent/.MainActivity
 
